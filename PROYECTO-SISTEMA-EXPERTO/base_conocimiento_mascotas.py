@@ -1,5 +1,4 @@
 # Base de conocimiento: sistema experto de diagnostico preliminar en perros y gatos
-# Solo contiene hechos y reglas, no incluye motor de inferencia
 
 # Predicados (signos y contexto observables por el dueño), agrupados por tipo
 PREDICADOS = {
@@ -68,8 +67,8 @@ ENFERMEDADES = {
 }
 
 
-# Hechos: codigo -> (enfermedad, contenido, fuente)
-# MC2015 = Muñoz Rascon et al. (2015), ER2014 = Esquivel y Reyes (2014)
+# Hechos: ID:(enfermedad, contenido, fuente)
+# Fuentes: MC2015 = Muñoz Rascon et al. (2015), ER2014 = Esquivel y Reyes (2014)
 HECHOS = {
     "H1": ("parvovirosis",
            "Se transmite por via fecal-oral. En jovenes o inmunodeprimidos inicia con anorexia, letargo y fiebre, y en 1-2 dias evoluciona a vomitos, diarrea hemorragica y deshidratacion.",
@@ -134,9 +133,7 @@ HECHOS = {
 }
 
 
-# Reglas: (condiciones, conclusion), en el orden R1 a R30
-# Una condicion es un predicado, ("NO", predicado) o ("O", predicado1, predicado2, ...)
-# Todas las condiciones de la tupla se unen con Y
+# Reglas: (condiciones, conclusion)
 REGLAS = (
     # R1
     (("Perro", "Vomitos", "DiarreaConSangre", "Letargo", "Anorexia",
