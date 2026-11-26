@@ -75,6 +75,7 @@ PREGUNTAS = {
 
 
 }
+# formas mas faciles de llamar a los sintomas
 SINTOMAS = {
     "Letargo": "poca energía", "Anorexia": "falta de apetito", "PerdidaPeso": "pérdida de peso",
     "Polifagia": "come en exceso", "PoliuriaPolidipsia": "mucha sed y orina", "Hiperactividad": "inquietud",
@@ -102,6 +103,7 @@ SINTOMAS = {
 }
 
 
+# nombres completos de enferemedades
 ENFERMEDAD_NOMBRE = {
     "parvovirosis": "Parvovirosis canina", "panleucopenia": "Panleucopenia felina",
     "indiscrecion_alimentaria": "Indigestión por comer algo inadecuado", "pancreatitis": "Pancreatitis aguda",
@@ -120,41 +122,42 @@ INFO = {enfermedad[0]: enfermedad for enfermedad in ENFERMEDADES}
 HECHO_DE = {hecho[0]: codigo for codigo, hecho in HECHOS.items()}
 HECHO_DE["flutd_obstructivo"] = "H9"
 
-def expandir(condicion): #basicamente toma una regla y separa todas sus condiciones
+def separar(condicion): #basicamente toma una condicion y separa sus alternativas
     if isinstance(condicion, str):
         return [[condicion]]
     if condicion[0] == "NO":
         if not isinstance(condicion[1], str):
             raise ValueError("NO solo se aplica a un predicado")
-        return [[("NO", condicion[1])]] #si hay un NO lo pone en tupla: [(no, condicion)]
+        return [[("NO", condicion[1])]] #si hay un NO lo guarda en una tupla para identificarlo despues
     if condicion[0] == "O":
         alternativas = []
         for subcondicion in condicion[1:]:
-            alternativas += expandir(subcondicion) #si hay un O separa las dos condiciones y las pone por separado (O, cond1, cond2) -> [[(cond1)], [(cond2)]]
+            alternativas += separar(subcondicion) #si hay un O, separa cada opcion y la guarda por su lado
         return alternativas
     raise ValueError("Operador desconocido: " + str(condicion[0]))
 
 
-def combinar(condiciones): #junta las condiciones que separamos antes en grupos, dependiendo de alternativas
+def combinar(condiciones): #junta las condiciones en grupos, tomando en cuenta las alternativas
     grupo_condiciones = [[]]
     for condicion in condiciones:
-        grupo_condiciones = [cuerpo + alternativa for cuerpo in grupo_condiciones for alternativa in expandir(condicion)]
+        grupo_condiciones = [cuerpo + alternativa for cuerpo in grupo_condiciones for alternativa in separar(condicion)]
     return grupo_condiciones
 
-def a_horn(reglas): #toma los grupos de condiciones y les da su conclusion
+def a_horn(reglas): #toma los grupos de condiciones y les agrega su conclusion
     clausulas = []
     for numero, (condiciones, conclusion) in enumerate(reglas, start=1):
         for cuerpo in combinar(condiciones):
-            clausulas.append(Clausula(conclusion, tuple(cuerpo), numero)) #basicamente convierte una regla compleja en varias causulas simples
+            clausulas.append(Clausula(conclusion, tuple(cuerpo), numero)) #convierte cada grupo en una clausula mas sencilla
     return clausulas
 
 
 
 
+# todas las reglas a clausulas
 CLAUSULAS = a_horn(REGLAS)
 
 
-class MotorSLD:
+class Motor:
     def __init__(self, preguntar=None):
         self.clausulas = CLAUSULAS
         self.preguntar = preguntar
@@ -162,63 +165,63 @@ class MotorSLD:
         self.preguntadas = []
         self.indice_meta = 0
         self.faltan_exacto = None
-        self.por_cabeza = {}
+        self.por_cabeza = {} # junta las clausulas que llegan a la misma conclusion
         for clausula in self.clausulas:
             self.por_cabeza.setdefault(clausula.cabeza, []).append(clausula)
-        self.generales = {}
+        self.generales = {} # guarda las relaciones entre predicados relacionados
         for clausula in self.clausulas:
             if len(clausula.cuerpo) == 1 and isinstance(clausula.cuerpo[0], str):
                 self.generales.setdefault(clausula.cuerpo[0], []).append(clausula.cabeza)
         todos = {predicado for grupo in PREDICADOS.values() for predicado in grupo}
         compuestos = {cabeza for cabeza, clausulas_de_cabeza in self.por_cabeza.items()
                       if all(len(clausula.cuerpo) > 1 for clausula in clausulas_de_cabeza)}
-        self.preguntables = todos - compuestos
+        self.preguntables = todos - compuestos # deja solo los predicados que se pueden preguntar
         self.contexto = set(PREDICADOS["contexto"])
-        self.metas = []
+        self.metas = [] # aqui se guarda la lista de enfermedades que se van a revisar
         for clausula in self.clausulas:
             if clausula.cabeza in INFO and clausula.cabeza not in self.metas:
                 self.metas.append(clausula.cabeza)
 
-    def fijar(self, predicado, valor=True):
+    def guardar_hecho(self, predicado, valor=True): # guarda un dato que ya conocemos, como si es perro o gato
         self.hechos[predicado] = valor
 
-    def _estado(self, predicado):
+    def estado(self, predicado): # revisa si un dato ya se sabe como verdadero o falso, namas se usa en afinar
         if predicado in self.hechos:
             return self.hechos[predicado]
         for predicado_general in self.generales.get(predicado, ()):
-            if self._estado(predicado_general) is False:
+            if self.estado(predicado_general) is False:
                 return False
         return None
 
-    def _base(self, predicado):
+    def obtener_dato(self, predicado): # busca el dato y, si hace falta, se lo pregunta al usuario
         if predicado in self.hechos:
             return self.hechos[predicado]
         if predicado not in self.preguntables:
             return False
         for predicado_general in self.generales.get(predicado, ()):
-            if predicado_general in self.preguntables and not self._base(predicado_general):
+            if predicado_general in self.preguntables and not self.obtener_dato(predicado_general):
                 self.hechos[predicado] = False
                 return False
         if self.preguntar:
             faltan = self.faltan_exacto
             if faltan is None:
-                faltan = self._estimar_faltan()
+                faltan = self.estimar_faltantes()
             self.hechos[predicado] = self.preguntar(predicado, len(self.preguntadas) + 1, faltan)
             self.preguntadas.append(predicado)
         else:
             self.hechos[predicado] = False
         return self.hechos[predicado]
 
-    def demostrar(self, meta, pila=()):
+    def demostrar(self, meta, pila=()): # intenta comprobar si se cumple una conclusion o enfermedad
         if meta in pila:
             return
-        if meta in self.preguntables and self._base(meta):
+        if meta in self.preguntables and self.obtener_dato(meta):
             yield Prueba(meta, "hecho", ())
         for clausula in self.por_cabeza.get(meta, ()):
-            for hijos in self._cuerpo(clausula.cuerpo, pila + (meta,)):
+            for hijos in self.revisa_condicion(clausula.cuerpo, pila + (meta,)):
                 yield Prueba(meta, f"R{clausula.regla}", tuple(hijos))
 
-    def _cuerpo(self, literales, pila):
+    def revisa_condicion(self, literales, pila): # revisa una por una las condiciones de una clausula
         if not literales:
             yield []
             return
@@ -226,15 +229,15 @@ class MotorSLD:
         if isinstance(primero, tuple):
             predicado = primero[1]
             if next(self.demostrar(predicado, pila), None) is None:
-                for pruebas_resto in self._cuerpo(resto, pila):
+                for pruebas_resto in self.revisa_condicion(resto, pila):
                     yield [Prueba("NO " + predicado, "NAF", ())] + pruebas_resto
         else:
             prueba = next(self.demostrar(primero, pila), None)
             if prueba is not None:
-                for pruebas_resto in self._cuerpo(resto, pila):
+                for pruebas_resto in self.revisa_condicion(resto, pila):
                     yield [prueba] + pruebas_resto
 
-    def diagnosticar(self):
+    def diagnosticar(self): # intenta encontrar cuales enfermedades se cumplen con los datos actuales
         resultados = []
         for posicion, enfermedad in enumerate(self.metas):
             self.indice_meta = posicion
@@ -245,17 +248,17 @@ class MotorSLD:
         return resultados
 
 
-    def _hojas(self, predicado):
+    def buscar_condicion(self, predicado): # busca todos sintomas o condiciones de una enfermedad
         if predicado in self.preguntables:
             return {predicado}
         hojas = set()
         for clausula in self.por_cabeza.get(predicado, ()):
             for literal in clausula.cuerpo:
-                hojas |= self._hojas(literal[1] if isinstance(literal, tuple) else literal)
+                hojas |= self.buscar_condicion(literal[1] if isinstance(literal, tuple) else literal)
         return hojas
 
-    def _estimar_faltan(self):
-        simulacion = MotorSLD(preguntar=lambda predicado, numero, faltan: False)
+    def estimar_faltantes(self): # hace una prueba para calcular aproximadamente cuantas preguntas faltan
+        simulacion = Motor(preguntar=lambda predicado, numero, faltan: False)
         simulacion.faltan_exacto = 0
         simulacion.hechos = dict(self.hechos)
         for meta in self.metas[self.indice_meta:]:
@@ -263,40 +266,40 @@ class MotorSLD:
         return max(0, len(simulacion.preguntadas) - 1)
 
 
-    def perfil(self, enfermedad):
+    def perfil(self, enfermedad): # obtiene la lista de sintomas relacionados con una enfermedad y los guarda
         signos = []
         for clausula in self.por_cabeza[enfermedad]:
             for literal in clausula.cuerpo:
                 if isinstance(literal, tuple):
                     continue
-                for hoja in sorted(self._hojas(literal)):
+                for hoja in sorted(self.buscar_condicion(literal)): #aqui busca los sintomas de la enfermedad
                     if hoja not in self.contexto and hoja not in signos:
                         signos.append(hoja)
         return signos
 
-    def pendientes_afinar(self, resultados):
+    def pendientes_afinar(self, resultados): # junta los sintomas que todavia no se han preguntado
         pendientes = []
         for enfermedad, _ in resultados:
-            for sintoma in self.perfil(enfermedad):
-                if self._estado(sintoma) is None and sintoma not in pendientes:
+            for sintoma in self.perfil(enfermedad): #busca el perfil de la enfermedad para conocer todos sus sintomas
+                if self.estado(sintoma) is None and sintoma not in pendientes:
                     pendientes.append(sintoma)
         return pendientes
 
-    def afinar(self, pendientes):
+    def afinar(self, pendientes): # pregunta los sintomas pendientes para revisar mejor los resultados
         for posicion, sintoma in enumerate(pendientes):
             self.faltan_exacto = len(pendientes) - posicion - 1
-            self._base(sintoma)
+            self.obtener_dato(sintoma)
         self.faltan_exacto = None
 
-    def _tiene(self, sintoma):
+    def tiene(self, sintoma): # revisa si el sintoma se confirmo directamente o por uno relacionado
         if self.hechos.get(sintoma):
             return True
         return any(self.hechos.get(especifico) for especifico, generales in self.generales.items()
                    if sintoma in generales)
 
-    def evaluar(self, enfermedad, prueba):
+    def evaluar(self, enfermedad, prueba): # compara los sintomas reportados con los de la enfermedad
         perfil = self.perfil(enfermedad)
-        presentes = [sintoma for sintoma in perfil if self._tiene(sintoma)]
+        presentes = [sintoma for sintoma in perfil if self.tiene(sintoma)]
         ausentes = [sintoma for sintoma in perfil if sintoma not in presentes]
         reportados = {predicado for predicado, valor in self.hechos.items()
                       if valor and predicado in self.preguntables and predicado not in self.contexto}
@@ -316,7 +319,7 @@ class MotorSLD:
 
 
 
-def etiqueta_seguridad(valor):
+def etiqueta_seguridad(valor): # convierte el numero de seguridad en alta, media o baja
     if valor >= 0.8:
         return "alta"
     if valor >= 0.6:
@@ -324,11 +327,11 @@ def etiqueta_seguridad(valor):
     return "baja"
 
 
-def lista(sintomas):
+def lista(sintomas): # cambia los nombres internos por nombres mas faciles de leer
     return ", ".join(SINTOMAS.get(sintoma, sintoma) for sintoma in sintomas) if sintomas else "ninguno"
 
 
-def mostrar_resultado(evaluaciones):
+def mostrar_resultado(evaluaciones): # muestra las enfermedades encontradas y sus sintomas
     print("\nRESULTADO")
     if not evaluaciones:
         print("Con estos datos no se identificó ninguna de las enfermedades del sistema.")
@@ -353,7 +356,7 @@ def mostrar_resultado(evaluaciones):
 
 
 
-def preguntar_usuario(predicado, numero, faltan):
+def preguntar_usuario(predicado, numero, faltan): # hace la pregunta y revisa que la respuesta sea valida
     texto = PREGUNTAS.get(predicado, f"¿Presenta {predicado}?")
     avance = f"faltan aprox. {faltan}" if faltan > 0 else "casi terminamos"
     while True:
@@ -365,26 +368,26 @@ def preguntar_usuario(predicado, numero, faltan):
         print("Responde s (sí) o n (no).")
 
 
-def consulta():
-    motor = MotorSLD(preguntar=preguntar_usuario)
+def consulta(): # lleva el proceso completo de una consulta
+    motor = Motor(preguntar=preguntar_usuario)
     print("\nResponda s (sí) o n (no). El número de preguntas que faltan es aproximado.")
     while True:
         especie = input("\n¿Su mascota es un perro (p) o un gato (g)? ").strip().lower()
         if especie in ("p", "g"):
             break
-    motor.fijar("Perro", especie == "p")
-    motor.fijar("Gato", especie == "g")
-    resultados = motor.diagnosticar()
-    pendientes = motor.pendientes_afinar(resultados)
-    if pendientes:
+    motor.guardar_hecho("Perro", especie == "p")
+    motor.guardar_hecho("Gato", especie == "g")
+    resultados = motor.diagnosticar() # revisa las enfermedades con las respuestas que ya tenemos
+    pendientes = motor.pendientes_afinar(resultados) #mira si hay pendientes
+    if pendientes: #si los encuentra
         print(f"\nPara afinar el resultado hacen falta {len(pendientes)} preguntas más.")
-        motor.afinar(pendientes)
+        motor.afinar(pendientes) #los pregunta
     mostrar_resultado([motor.evaluar(enfermedad, prueba) for enfermedad, prueba in resultados])
     print(f"\nPreguntas respondidas: {len(motor.preguntadas)}")
     input("\nPresiona ENTER para continuar...")
 
 
-def menu():
+def menu(): 
     while True:
         print("\n===================================")
         print(" MOTOR DE INFERENCIA DE MASCOTAS")
